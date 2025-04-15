@@ -1,0 +1,470 @@
+# Import necessary libraries
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.cross_decomposition import PLSRegression
+from sklearn.preprocessing import LabelEncoder, StandardScaler
+from sklearn.model_selection import cross_val_score
+from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
+from statsmodels.stats.outliers_influence import variance_inflation_factor
+
+from sklearn.model_selection import KFold, GridSearchCV  # Import KFold here
+from sklearn.model_selection import StratifiedKFold
+from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay, accuracy_score # GEMINI Import necessary metrics
+
+from scipy.spatial import ConvexHull
+
+# --------------------------
+# 1. Load and Preview Data
+# --------------------------
+file_path = "DATA.csv"  # Update to the correct path of your CSV file
+df = pd.read_csv(file_path, encoding='latin1')
+print("Data Preview:")
+print(df.head())
+
+# --------------------------
+# 2. Data Cleaning & Preprocessing
+# --------------------------
+# Clean the 'group' column (remove unwanted characters)
+df['group'] = df['group'].astype(str).str.replace('Ê', '', regex=True)
+
+# Define metadata and feature columns
+metadata_cols = ['sample', 'group']
+feature_cols = [col for col in df.columns if col not in metadata_cols]
+
+# --------------------------
+# 3. Arcsinh Transform and Standardize Features
+# --------------------------
+scaler = StandardScaler()
+df_scaled = df.copy()
+
+# Apply arcsinh transformation to feature columns before standardizing
+df_scaled[feature_cols] = np.arcsinh(df[feature_cols]) #removing this line will turn off arcsinh
+
+# Standardize the transformed data
+df_scaled[feature_cols] = scaler.fit_transform(df_scaled[feature_cols])
+
+# --------------------------
+# 4. Encode Group for Classification
+# --------------------------
+label_encoder = LabelEncoder()
+df_scaled["group_encoded"] = label_encoder.fit_transform(df_scaled["group"])
+
+# --------------------------
+# 5. Prepare Data for PLS-DA
+# --------------------------
+X = df_scaled[feature_cols]      # Feature data
+y = df_scaled["group_encoded"]   # Encoded group labels
+
+# --------------------------
+# 6. Fit the PLS-DA Model
+# --------------------------
+n_components = 3  # Number of PLS components; adjust as needed
+pls = PLSRegression(n_components=n_components)
+pls.fit(X, y)
+X_scores = pls.transform(X)  # Project data into PLS space
+
+# --------------------------
+# 7. Scatter Plots: Sample Group Clustering in PLS Space
+# --------------------------
+
+# PLS Component 1 vs PLS Component 2
+plt.figure(figsize=(8,6))
+for group in np.unique(y):
+    plt.scatter(X_scores[y == group, 0], 
+                X_scores[y == group, 1],
+                label=label_encoder.inverse_transform([group])[0],
+                marker='x', s=20, alpha=0.7)  
+plt.xlabel("PLS Component 1")
+plt.ylabel("PLS Component 2")
+plt.title("PLS-DA: PLS1 vs PLS2 Group Clustering")
+plt.legend()
+
+plt.savefig("PLS1vs2.png", dpi=300, bbox_inches="tight")  # PNG for easy sharing
+plt.savefig("PLS1vs2.svg", format="svg", bbox_inches="tight")  # SVG for vector editing
+
+plt.show()
+
+# PLS Component 1 vs PLS Component 3
+plt.figure(figsize=(8,6))
+for group in np.unique(y):
+    plt.scatter(X_scores[y == group, 0], 
+                X_scores[y == group, 2],  # Using Component 3
+                label=label_encoder.inverse_transform([group])[0],
+                marker='x', s=20, alpha=0.7)  
+plt.xlabel("PLS Component 1")
+plt.ylabel("PLS Component 3")
+plt.title("PLS-DA: PLS1 vs PLS3 Group Clustering")
+plt.legend()
+
+plt.savefig("PLS1vs3.png", dpi=300, bbox_inches="tight")  # PNG for easy sharing
+plt.savefig("PLS1vs3.svg", format="svg", bbox_inches="tight")  # SVG for vector editing
+
+plt.show()
+
+def plot_convex_hull(X_scores, y, label_encoder, component_x, component_y, title, filename):
+    """Plots scatter with convex hulls and saves the figure."""
+    plt.figure(figsize=(8,6))
+    
+    for group in np.unique(y):
+        mask = y == group
+        points = X_scores[mask][:, [component_x, component_y]]
+        
+        # Scatter points
+        plt.scatter(points[:, 0], points[:, 1], label=label_encoder.inverse_transform([group])[0], alpha=0.7)
+        
+        # Draw convex hull
+        if len(points) > 2:  # Convex hull needs at least 3 points
+            hull = ConvexHull(points)
+            for simplex in hull.simplices:
+                plt.plot(points[simplex, 0], points[simplex, 1], 'k-', lw=1)
+    
+    plt.xlabel(f"PLS Component {component_x + 1}")
+    plt.ylabel(f"PLS Component {component_y + 1}")
+    plt.title(title)
+    plt.legend()
+
+    # Save as PNG and SVG in the root directory
+    plt.savefig(f"{filename}.png", dpi=300, bbox_inches="tight")
+    plt.savefig(f"{filename}.svg", format="svg", bbox_inches="tight")
+
+    plt.show()
+
+
+def plot_star_plot(X_scores, y, label_encoder, component_x, component_y, title, filename):
+    """Plots scatter with star connections to centroid and saves the figure."""
+    plt.figure(figsize=(8,6))
+    
+    for group in np.unique(y):
+        mask = y == group
+        points = X_scores[mask][:, [component_x, component_y]]
+        centroid = points.mean(axis=0)  # Compute group centroid
+
+        # Scatter points
+        plt.scatter(points[:, 0], points[:, 1], label=label_encoder.inverse_transform([group])[0], alpha=0.7)
+        
+        # Draw star connections
+        for point in points:
+            plt.plot([point[0], centroid[0]], [point[1], centroid[1]], 'k--', lw=0.8)  # Dashed lines to centroid
+        
+        # Mark centroid
+        plt.scatter(centroid[0], centroid[1], marker="*", s=200, color="black", label="Centroid" if group == np.unique(y)[0] else "")
+    
+    plt.xlabel(f"PLS Component {component_x + 1}")
+    plt.ylabel(f"PLS Component {component_y + 1}")
+    plt.title(title)
+    plt.legend()
+
+    # Save as PNG and SVG in the root directory
+    plt.savefig(f"{filename}.png", dpi=300, bbox_inches="tight")
+    plt.savefig(f"{filename}.svg", format="svg", bbox_inches="tight")
+
+    plt.show()
+
+
+# --------------------------
+# Generate and Save All Plots
+# --------------------------
+
+# 7.1 PLS1 vs PLS2 with Convex Hulls
+plot_convex_hull(X_scores, y, label_encoder, 0, 1, "PLS-DA: PLS1 vs PLS2 (Convex Hull)", "pls1_vs_pls2_convex")
+
+# 7.2 PLS1 vs PLS2 with Star Plot
+plot_star_plot(X_scores, y, label_encoder, 0, 1, "PLS-DA: PLS1 vs PLS2 (Star Plot)", "pls1_vs_pls2_star")
+
+# 7.3 PLS1 vs PLS3 with Convex Hulls
+plot_convex_hull(X_scores, y, label_encoder, 0, 2, "PLS-DA: PLS1 vs PLS3 (Convex Hull)", "pls1_vs_pls3_convex")
+
+# 7.4 PLS1 vs PLS3 with Star Plot
+plot_star_plot(X_scores, y, label_encoder, 0, 2, "PLS-DA: PLS1 vs PLS3 (Star Plot)", "pls1_vs_pls3_star")
+
+# --------------------------
+# 8. Variance Captured by Each PLS Component
+# --------------------------
+var_scores = np.var(pls.x_scores_, axis=0)
+explained_variance = var_scores / np.sum(var_scores) * 100
+print("Variance Captured by Each PLS Component:")
+for i, var in enumerate(explained_variance, start=1):
+    print(f"PLS Component {i}: {var:.1f}% of variance explained")
+
+# --------------------------
+# 9. Compute PLS Loadings (Feature Contributions)
+# --------------------------
+pls_loadings = pd.DataFrame(pls.x_weights_, index=feature_cols,
+                            columns=[f"PLS Component {i}" for i in range(1, n_components+1)])
+print("\nPLS Loadings (Feature Contributions):")
+print(pls_loadings)
+# Interpretation: Higher absolute values mean a stronger influence on the component.
+# The sign indicates the direction (positive pushes samples toward the positive end of the axis).
+
+
+# --------------------------
+# 10. Bar Graph: Loadings for Component 1 and Component 2
+# --------------------------
+# Extract loadings for Component 1 and 2
+loadings_comp1 = pls_loadings["PLS Component 1"]
+loadings_comp2 = pls_loadings["PLS Component 2"]
+loadings_comp3 = pls_loadings["PLS Component 3"]
+
+# Create a DataFrame for bar plotting
+bar_data = pd.DataFrame({"Component 1": loadings_comp1, "Component 2": loadings_comp2, "Component 3": loadings_comp3})
+bar_data = bar_data.sort_index()  # Optional: sort by feature name
+
+# Plot side-by-side bars for each feature
+bar_data.plot(kind="bar", figsize=(12, 6))
+plt.ylabel("Loading Value")
+plt.title("PLS Loadings for all Components")
+plt.tight_layout()
+plt.savefig("PLS Loadings for all Components.png", dpi=300, bbox_inches="tight")  # PNG for easy sharing
+plt.savefig("PLS Loadings for all Components.svg", format="svg", bbox_inches="tight")  # SVG for vector editing
+
+plt.show()
+
+# Extract loadings for Component 1, sort from lowest to highest
+loadings_comp1 = pls_loadings["PLS Component 1"].sort_values()
+plt.figure(figsize=(10, 6))
+loadings_comp1.plot(kind='bar')
+plt.ylabel("Loading Value")
+plt.title("PLS Loadings for Component 1 (Ordered from Lowest to Highest)")
+plt.tight_layout()
+
+# Save as both PNG and SVG
+plt.savefig("loadingsPLS_1.png", dpi=300, bbox_inches="tight")  
+plt.savefig("loadingsPLS_1.svg", format="svg", bbox_inches="tight")  
+
+plt.show()
+
+# Extract loadings for Component 2, sort from lowest to highest
+loadings_comp2 = pls_loadings["PLS Component 2"].sort_values()
+plt.figure(figsize=(10, 6))
+loadings_comp2.plot(kind='bar', color='orange')
+plt.ylabel("Loading Value")
+plt.title("PLS Loadings for Component 2 (Ordered from Lowest to Highest)")
+plt.tight_layout()
+
+# Save as both PNG and SVG
+plt.savefig("loadingsPLS_2.png", dpi=300, bbox_inches="tight")  
+plt.savefig("loadingsPLS_2.svg", format="svg", bbox_inches="tight")  
+
+plt.show()
+
+# Extract loadings for Component 3, sort from lowest to highest
+loadings_comp3 = pls_loadings["PLS Component 3"].sort_values()
+plt.figure(figsize=(10, 6))
+loadings_comp3.plot(kind='bar', color='green')
+plt.ylabel("Loading Value")
+plt.title("PLS Loadings for Component 3 (Ordered from Lowest to Highest)")
+plt.tight_layout()
+
+# Save as both PNG and SVG
+plt.savefig("loadingsPLS_3.png", dpi=300, bbox_inches="tight")  
+plt.savefig("loadingsPLS_3.svg", format="svg", bbox_inches="tight")  
+
+plt.show()
+
+# --------------------------
+# 11. Pearson Correlation Matrix (Heatmap)
+# --------------------------
+corr_matrix = df_scaled[feature_cols].corr()
+plt.figure(figsize=(12, 8))
+sns.heatmap(corr_matrix, annot=True, cmap="coolwarm", fmt=".2f", linewidths=0.5)
+plt.title("Pearson Correlation Matrix")
+
+# Save as both PNG and SVG
+plt.savefig("pearson.png", dpi=300, bbox_inches="tight")  
+plt.savefig("pearson.svg", format="svg", bbox_inches="tight")  
+
+plt.show()
+
+# --------------------------
+# 12. Variance Inflation Factor (VIF) Calculation
+# --------------------------
+#vif_data = pd.DataFrame()
+#vif_data["Feature"] = feature_cols
+#vif_data["VIF"] = [variance_inflation_factor(df_scaled[feature_cols].values, i) 
+#                   for i in range(len(feature_cols))]
+#print("\nVariance Inflation Factor (VIF) Scores:")
+#print(vif_data)
+
+
+# --------------------------
+# 13. Cross-Validation Accuracy
+# --------------------------
+lda = LinearDiscriminantAnalysis()
+cv_scores = cross_val_score(lda, X_scores, y, cv=5)
+accuracy = np.mean(cv_scores) * 100
+print("\nCross-Validation Accuracy LDA: {:.1f}%".format(accuracy))
+
+# --------------------------
+# 14. Evaluate with Cross-Validation and Confusion Matrix
+# --------------------------
+
+kf = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+y_true = []
+y_pred = []
+for train_index, test_index in kf.split(X, y):
+    X_train, X_test = X.iloc[train_index], X.iloc[test_index]
+    y_train, y_test = y.iloc[train_index], y.iloc[test_index]
+
+    pls_cv = PLSRegression(n_components=3)
+    pls_cv.fit(X_train, y_train)
+    X_train_scores = pls_cv.transform(X_train)
+    X_test_scores = pls_cv.transform(X_test)
+
+    lda_cv = LinearDiscriminantAnalysis()
+    lda_cv.fit(X_train_scores, y_train)
+    y_pred_fold = lda_cv.predict(X_test_scores)
+
+    y_true.extend(y_test)
+    y_pred.extend(y_pred_fold)
+
+accuracy = accuracy_score(y_true, y_pred)
+print(f"Cross-Validation Accuracy KFOLD: {accuracy * 100:.2f}%")
+
+
+cm = confusion_matrix(y_true, y_pred)
+disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=label_encoder.classes_)
+disp.plot()
+plt.title("Confusion Matrix (Cross-Validated)")
+# Save as both PNG and SVG
+plt.savefig("confusion_matrix.png", dpi=300, bbox_inches="tight")  
+plt.savefig("confusion_matrix.svg", format="svg", bbox_inches="tight")  
+plt.show()
+# --------------------------
+# 14. Compute Corrected VIP Scores (Single Column)
+# --------------------------
+
+def calculate_vip(pls_model, X):
+    """Calculate VIP scores for each feature in a PLS model."""
+    T = pls_model.x_scores_  # PLS scores (n_samples x n_components)
+    W = pls_model.x_weights_  # PLS weights (n_features x n_components)
+    Q = pls_model.y_loadings_  # Loadings on Y (n_components x 1)
+    
+    p, h = W.shape  # p = number of features, h = number of components
+
+    # Ensure Q is properly shaped for broadcasting
+    Q = Q.reshape(-1, 1)  # Reshape Q to (h, 1)
+
+    # Compute the sum of squared scores weighted by squared loadings
+    s = np.sum(np.square(T) * np.square(Q.T), axis=0)  # Sum over samples for each component
+    total_s = np.sum(s)  # Total sum of squares across all components
+
+    vip_scores = np.zeros((p,))
+
+    for i in range(p):
+        weight = np.sum((W[i, :] ** 2) * s / total_s)  # Contribution of feature i
+        vip_scores[i] = np.sqrt(p * weight)
+
+    return pd.DataFrame(vip_scores, index=X.columns, columns=["VIP Score"])
+
+# Compute VIP scores
+vip_scores = calculate_vip(pls, X)
+
+# Print the VIP scores
+print("\nVariable Importance in Projection (VIP) Scores:")
+print(vip_scores)
+
+# --------------------------
+# 15. Plot VIP Scores (Corrected: Only One Bar Chart)
+# --------------------------
+plt.figure(figsize=(12, 6))
+vip_scores["VIP Score"].sort_values(ascending=False).plot(kind='bar', color='purple')
+plt.ylabel("VIP Score")
+plt.title("VIP Scores (Aggregated Across All Components)")
+plt.axhline(y=1, color='red', linestyle='dashed', label="VIP Threshold (1.0)")  # Threshold
+plt.legend()
+plt.tight_layout()
+
+# Save as both PNG and SVG
+plt.savefig("vip_scores_plot.png", dpi=300, bbox_inches="tight")  
+plt.savefig("vip_scores_plot.svg", format="svg", bbox_inches="tight")  
+
+plt.show()
+
+# --------------------------
+# 16. Find optimal number of components
+# --------------------------
+
+from sklearn.metrics import mean_squared_error
+
+max_components = 5  # Test up to 10 LVs
+errors = np.zeros(max_components)  # Store cumulative errors
+
+# Loop through different numbers of components
+for n in range(1, max_components + 1):
+    fold_errors = []  # Store errors for each fold
+
+    for train_index, test_index in kf.split(X, y):  # K-Fold cross-validation loop
+        X_train, X_test = X.iloc[train_index], X.iloc[test_index]
+        y_train, y_test = y.iloc[train_index], y.iloc[test_index]
+
+        pls = PLSRegression(n_components=n)
+        pls.fit(X_train, y_train)
+        y_pred = pls.predict(X_test)
+        fold_errors.append(mean_squared_error(y_test, y_pred))  # Store error for this fold
+
+    errors[n - 1] = np.mean(fold_errors)  # Average error across folds
+
+# Find the optimal number of LVs (minimum error)
+optimal_n_components = np.argmin(errors) + 1  # +1 because index starts at 0
+print(f"Optimal number of LVs: {optimal_n_components}")
+
+var_scores = np.var(pls.x_scores_, axis=0)
+explained_variance = var_scores / np.sum(var_scores) * 100
+cumulative_variance = np.cumsum(explained_variance)
+
+print("Variance Captured by Each PLS Component:")
+for i, var in enumerate(explained_variance, start=1):
+    print(f"PLS Component {i}: {var:.1f}% of variance explained")
+
+print("\nCumulative Variance Explained:")
+for i, var in enumerate(cumulative_variance, start=1):
+    print(f"Up to PLS Component {i}: {var:.1f}% of variance explained")
+
+
+    from scipy.stats import mannwhitneyu
+
+random_errors = []
+
+
+# --------------------------
+# 17. Permutation test
+# --------------------------
+
+# Run 100 random permutations
+for _ in range(100):
+    fold_errors = []  # Store error for each fold
+
+    for train_index, test_index in kf.split(X, y):  # K-Fold loop
+        X_train, X_test = X.iloc[train_index], X.iloc[test_index]
+        y_train, y_test = y.iloc[train_index], y.iloc[test_index]
+
+        # Shuffle Y for permutation testing
+        y_permuted = np.random.permutation(y_train)
+
+        # Train PLS model on permuted Y
+        pls_perm = PLSRegression(n_components=optimal_n_components)
+        pls_perm.fit(X_train, y_permuted)
+
+        # Predict on test data
+        y_perm_pred = pls_perm.predict(X_test)
+        fold_errors.append(mean_squared_error(y_test, y_perm_pred))
+
+    # Store the average error across all folds
+    random_errors.append(np.mean(fold_errors))
+
+# Compare actual model error to random errors using Mann-Whitney U-test
+u_statistic, p_value = mannwhitneyu(errors, random_errors, alternative='less')
+print(f"Model significance (Mann-Whitney U-test): p = {p_value:.10f}")
+
+
+#Methods
+#Partial Least Squares Discriminant Analysis (PLS-DA) and Model Validation
+#All data processing, modeling, and statistical analyses were conducted using Python (v3.13) using the following libraries: scikit-learn for PLS-DA, LASSO regression, cross-validation, and classification metrics, numpy and pandas for data manipulation and numerical operations, matplotlib and seaborn for visualization of PLS scores, feature loadings, and model performance, and scipy.stats for statistical significance testing.
+
+#Partial least squares discriminant analysis (PLS-DA) was performed to classify samples based on the measured features. Prior to modeling, all data were transformed using the inverse hyperbolic sine (arcsinh) function to stabilize variance across measurements and accommodate data skewness. Transformed data were then standardized by Z-score normalization across each feature.
+#Cross-validation was performed using a Stratified K-Fold approach using 1/5 of the dataset to ensure balanced representation of each class within training and validation sets. The number of latent variables (LVs) was determined by iteratively testing models with up to 10 LVs and selecting the number that minimized mean squared error (MSE) across validation folds.
+#Model performance was evaluated by calculating classification accuracy from cross-validation, as well as visualizing separation in PLS score space using convex hulls and star plots.
+#Variable importance was assessed using PLS loadings and Variable Importance in Projection (VIP) scores. Features with high VIP scores (>1.0) were considered strong contributors to class separation. Additionally, Least Absolute Shrinkage and Selection Operator (LASSO) regression was performed iteratively across all features to identify the most frequently selected predictors for classification.
+#To assess the statistical significance of the classification model, permutation testing (n = 100) was performed by randomly shuffling class labels and rebuilding the PLS-DA model for each iteration. The distribution of errors from these randomized models was compared to the observed classification error using a Mann–Whitney U-test, with significance defined as p < 0.05.
